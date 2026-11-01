@@ -1,3 +1,4 @@
-frontend and backend how to open to run
+frontend npm run dev
+backend python app.py  .\.venv\Scripts\Activate.ps1
 
-https://github.com/SarvasettyVarshitha/Aqua_Sense.git
+

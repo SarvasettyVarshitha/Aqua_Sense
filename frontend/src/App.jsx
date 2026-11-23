@@ -1,5 +1,8 @@
 
 import { useState, useEffect } from "react";
+
+import { predictWaterQuality } from "./fuzzyModel";
+
 import {
   LineChart,
   Line,
@@ -9,9 +12,11 @@ import {
   Tooltip,
   ResponsiveContainer
 } from "recharts";
+
 import "./App.css";
 
 function App() {
+
   const [form, setForm] = useState({
     ph: 7.2,
     turbidity: 3,
@@ -24,39 +29,21 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  // Load prediction history from MySQL
-  const loadHistory = async () => {
+  // Load prediction history from browser storage
+  const loadHistory = () => {
     try {
-      const response = await fetch(
-        "http://127.0.0.1:5000/history"
-      );
+      const savedHistory = localStorage.getItem("aquasense_history");
 
-      const data = await response.json();
+      const records = savedHistory
+        ? JSON.parse(savedHistory)
+        : [];
 
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || "Failed to load history");
-      }
+      setHistory(records);
 
-      const formattedHistory = data.history.map(item => ({
-        id: item.id,
-        time: new Date(item.created_at).toLocaleString(),
-        ph: item.ph,
-        turbidity: item.turbidity,
-        temperature: item.temperature,
-        dissolved_oxygen: item.dissolved_oxygen,
-        score: item.water_score,
-        prediction: item.water_quality
-      }));
-
-      setHistory(formattedHistory);
-
-      // Display the latest saved prediction
-      if (formattedHistory.length > 0) {
-        const latest = formattedHistory[0];
-
+      if (records.length > 0) {
         setResult({
-          prediction: latest.prediction,
-          quality_score: latest.score
+          prediction: records[0].prediction,
+          quality_score: records[0].score
         });
       } else {
         setResult(null);
@@ -64,6 +51,7 @@ function App() {
 
     } catch (err) {
       console.error("History loading error:", err);
+      setHistory([]);
     }
   };
 
@@ -80,9 +68,8 @@ function App() {
     });
   };
 
-  // Predict water quality
-  const handlePredict = async () => {
-    const values = Object.values(form).map(Number);
+  // Predict water quality using JavaScript fuzzy model
+  const handlePredict = () => {
 
     if (
       form.ph === "" ||
@@ -93,6 +80,8 @@ function App() {
       setError("Please fill in all fields.");
       return;
     }
+
+    const values = Object.values(form).map(Number);
 
     if (values.some(v => !Number.isFinite(v))) {
       setError("Please enter valid numbers.");
@@ -114,36 +103,46 @@ function App() {
     setError("");
 
     try {
-      const response = await fetch(
-        "http://127.0.0.1:5000/predict",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            ph: Number(form.ph),
-            turbidity: Number(form.turbidity),
-            temperature: Number(form.temperature),
-            dissolved_oxygen: Number(form.dissolved_oxygen)
-          })
-        }
+
+      // Run fuzzy logic prediction
+      const data = predictWaterQuality(
+        Number(form.ph),
+        Number(form.turbidity),
+        Number(form.temperature),
+        Number(form.dissolved_oxygen)
       );
-
-      const data = await response.json();
-
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || "Prediction failed");
-      }
 
       // Display prediction result
       setResult(data);
 
-      // Refresh history directly from MySQL
-      await loadHistory();
+      // Create history record
+      const newRecord = {
+        id: Date.now(),
+        time: new Date().toLocaleString(),
+        ph: Number(form.ph),
+        turbidity: Number(form.turbidity),
+        temperature: Number(form.temperature),
+        dissolved_oxygen: Number(form.dissolved_oxygen),
+        score: data.quality_score,
+        prediction: data.prediction
+      };
+
+      // Add latest prediction to history
+      const updatedHistory = [
+        newRecord,
+        ...history
+      ];
+
+      // Save history in browser
+      localStorage.setItem(
+        "aquasense_history",
+        JSON.stringify(updatedHistory)
+      );
+
+      setHistory(updatedHistory);
 
     } catch (err) {
-      setError(err.message);
+      setError(err.message || "Prediction failed.");
     } finally {
       setLoading(false);
     }
@@ -166,12 +165,15 @@ function App() {
           <h1>🌊 AquaSense</h1>
           <p>Smart Water Quality Monitoring System</p>
         </div>
+
         <span className="status">● System Online</span>
       </header>
 
       <section className="welcome">
         <h2>Water Quality Dashboard</h2>
-        <p>Monitor and predict water quality using fuzzy logic.</p>
+        <p>
+          Monitor and predict water quality using fuzzy logic.
+        </p>
       </section>
 
       <section className="cards">
@@ -205,6 +207,7 @@ function App() {
       <section className="main-grid">
 
         <div className="panel">
+
           <h2>Enter Water Parameters</h2>
 
           <label>pH Value</label>
@@ -251,14 +254,21 @@ function App() {
             onChange={handleChange}
           />
 
-          <button onClick={handlePredict} disabled={loading}>
+          <button
+            onClick={handlePredict}
+            disabled={loading}
+          >
             {loading ? "Analyzing..." : "Predict Water Quality"}
           </button>
 
-          {error && <p className="error">{error}</p>}
+          {error && (
+            <p className="error">{error}</p>
+          )}
+
         </div>
 
         <div className="panel result-panel">
+
           <h2>Prediction Result</h2>
 
           {result ? (
@@ -272,7 +282,9 @@ function App() {
                 {result.prediction}
               </h2>
 
-              <p>Water quality prediction completed successfully.</p>
+              <p>
+                Water quality prediction completed successfully.
+              </p>
             </>
           ) : (
             <div className="empty">
@@ -280,22 +292,34 @@ function App() {
               <p>Enter parameters and click Predict.</p>
             </div>
           )}
+
         </div>
 
       </section>
 
       <section className="panel chart-panel">
+
         <h2>Water Quality Score Trend</h2>
 
         {history.length > 0 ? (
           <ResponsiveContainer width="100%" height={280}>
+
             <LineChart
               data={[...history].reverse()}
-              margin={{ top: 15, right: 20, left: 0, bottom: 5 }}
+              margin={{
+                top: 15,
+                right: 20,
+                left: 0,
+                bottom: 5
+              }}
             >
+
               <CartesianGrid strokeDasharray="3 3" />
+
               <XAxis dataKey="time" />
+
               <YAxis domain={[0, 100]} />
+
               <Tooltip />
 
               <Line
@@ -306,21 +330,28 @@ function App() {
                 dot={{ r: 5 }}
                 name="Quality Score"
               />
+
             </LineChart>
+
           </ResponsiveContainer>
         ) : (
           <p className="empty">
             Your score chart will appear after predictions.
           </p>
         )}
+
       </section>
 
       <section className="panel history-panel">
+
         <h2>Prediction History</h2>
 
         {history.length > 0 ? (
+
           <div className="table-scroll">
+
             <table>
+
               <thead>
                 <tr>
                   <th>Time</th>
@@ -334,6 +365,7 @@ function App() {
               </thead>
 
               <tbody>
+
                 {history.map(item => (
                   <tr key={item.id}>
                     <td>{item.time}</td>
@@ -345,18 +377,25 @@ function App() {
                     <td>{item.prediction}</td>
                   </tr>
                 ))}
+
               </tbody>
+
             </table>
+
           </div>
+
         ) : (
           <p className="empty">
             No prediction records available yet.
           </p>
         )}
+
       </section>
 
       <footer>
-        <p>© 2026 AquaSense | Smart Water Quality Prediction</p>
+        <p>
+          © 2026 AquaSense | Smart Water Quality Prediction
+        </p>
       </footer>
 
     </div>
